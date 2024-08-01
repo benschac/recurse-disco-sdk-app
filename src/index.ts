@@ -12,13 +12,16 @@
  */
 import dotenv from 'dotenv'
 dotenv.config()
-import express, { Express, Request, Response } from 'express'
+import express, { Express, NextFunction, Request, Response } from 'express'
 import session from 'express-session'
+import ky from 'ky'
+import { URLSearchParams } from 'url'
 
 import cookieParser from 'cookie-parser'
 import passport from 'passport'
-import OAuth2Strategy from 'passport-oauth2'
+import OAuth2Strategy, { VerifyCallback, VerifyFunction } from 'passport-oauth2'
 import logger from 'morgan'
+import { FixMe } from './types'
 
 dotenv.config()
 
@@ -32,6 +35,10 @@ const {
   RECURSE_CENTER_CALLBACK_URL,
   SESSION_SECRET,
 } = process.env
+app.use((req, res, next) => {
+  console.log(`Received ${req.method} request for ${req.url}`)
+  next()
+})
 
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
@@ -63,6 +70,10 @@ for (const varName of requiredEnvVars) {
     throw new Error(`Environment variable ${varName} is required`)
   }
 }
+console.log(
+  process.env.RECURSE_CENTER_APP_ID,
+  process.env.RECURSE_CENTER_APP_SECRET
+)
 
 const rc0AuthStrategy = new OAuth2Strategy(
   {
@@ -75,11 +86,14 @@ const rc0AuthStrategy = new OAuth2Strategy(
   (
     accessToken: string,
     refreshToken: string,
-    profile: any,
-    done: (error: any, user?: any, info?: any) => void
+    profile: FixMe,
+    done: VerifyCallback
   ) => {
-    // Handle the authenticated user
-    done(null, profile, 'Some info message')
+    console.log('OAuth strategy callback reached')
+    console.log('Access Token:', accessToken)
+    console.log('Refresh Token:', refreshToken)
+    console.log('Profile:', profile)
+    done(null, { accessToken, refreshToken, profile })
   }
 )
 
@@ -90,23 +104,51 @@ if (!RECURSE_CENTER_APP_ID || !RECURSE_CENTER_APP_SECRET) {
 }
 
 passport.use(rc0AuthStrategy)
+// Serialize user for storing in session
+passport.serializeUser((user: Express.User, done) => {
+  console.log('Serializing user:', user)
+
+  done(null, user)
+})
+
+// Deserialize user from session
+passport.deserializeUser((user: Express.User, done) => {
+  console.log('Deserializing user:', user)
+  done(null, user)
+})
 
 app.get('/', (req: Request, res: Response) => {
   res.send('hello disco')
 })
 
-app.get('/auth/example', passport.authenticate('oauth2'))
-app.get(
+// app.get('/auth/example', passport.authenticate('oauth2'))
+app.get('/auth/recurse', (req: Request, res: Response, next: NextFunction) => {
+  console.log('Starting OAuth flow'),
+    passport.authenticate('oauth2')(req, res, next)
+})
+
+app.post(
   '/callback',
-  passport.authenticate('oauth2', { failureRedirect: '/login' }),
-  function (req, res) {
-    // Successful authentication, redirect home.
+  (req: Request, res: Response, next: NextFunction) => {
+    console.log('Callback route reached')
+    console.log('Query parameters:', req.query)
+    next()
+  },
+  passport.authenticate('oauth2', { failureRedirect: '/' }),
+  (req: Request, res: Response) => {
+    console.log('Authentication successful')
+    console.log('User:', req.user)
     res.redirect('/')
   }
 )
-
 app.post('/login', (req: Request, res: Response) => {
   res.send('login endpoint')
+})
+
+// Error handling middleware
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  console.error('Error:', err)
+  res.status(500).json({ error: 'An error occurred', details: err.message })
 })
 
 app.listen(PORT, () => {
